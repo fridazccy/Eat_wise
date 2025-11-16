@@ -3,6 +3,7 @@ import re
 import json
 import requests
 import streamlit as st
+import pandas as pd
 
 # dotenv is optional so the app won't crash if python-dotenv is not installed
 try:
@@ -298,22 +299,58 @@ if st.button("Analyze"):
             # Enforce restrictions as a safety net (filter out violating items)
             parsed_filtered, removed_items = filter_items_by_restrictions(parsed, restrictions)
 
-            st.subheader("Parsed JSON")
-            st.json(parsed_filtered)
+            # Present nutrition table instead of a long JSON list
+            st.subheader("Nutrition Analysis")
+            if isinstance(parsed_filtered, dict) and isinstance(parsed_filtered.get("items"), list):
+                items = parsed_filtered.get("items", [])
+                # Build a dataframe with chosen columns
+                rows = []
+                for it in items:
+                    if not isinstance(it, dict):
+                        continue
+                    rows.append(
+                        {
+                            "Name": it.get("name", ""),
+                            "Quantity": it.get("quantity_text", ""),
+                            "Estimated grams": it.get("estimated_grams", ""),
+                            "Calories": it.get("calories_estimate", ""),
+                            "Protein (g)": it.get("protein_g", ""),
+                            "Carbs (g)": it.get("carbs_g", ""),
+                            "Fat (g)": it.get("fat_g", ""),
+                            "Estimated?": it.get("estimated", ""),
+                        }
+                    )
+                if rows:
+                    df = pd.DataFrame(rows)
+                    st.table(df)
+                else:
+                    st.info("No itemized foods returned by the assistant.")
 
-            # Display age/gender-tailored suggestions (from the model's 'suggestions' field)
+                # Show totals as a compact table if available
+                totals = parsed_filtered.get("totals")
+                if isinstance(totals, dict):
+                    totals_row = {
+                        "Calories": totals.get("calories", ""),
+                        "Protein (g)": totals.get("protein_g", ""),
+                        "Carbs (g)": totals.get("carbs_g", ""),
+                        "Fat (g)": totals.get("fat_g", ""),
+                    }
+                    st.subheader("Totals")
+                    st.table(pd.DataFrame([totals_row]))
+            else:
+                st.error("Could not parse nutrition items from the assistant response.")
+
+            # Display suggestions (no extra parenthetical text)
             suggestions = []
             if isinstance(parsed_filtered, dict):
                 suggestions = parsed_filtered.get("suggestions") or []
+            st.subheader("Suggestions")
             if suggestions and isinstance(suggestions, list):
-                st.subheader("Suggestions (tailored to age & gender)")
                 for s in suggestions:
                     st.write(f"- {s}")
             else:
-                # If model didn't return suggestions, show an informative fallback
                 st.info(
-                    "No explicit suggestions were returned by the assistant. The assistant is asked to provide 3-5 food suggestions tailored to the user's age and gender; "
-                    "if you don't see suggestions, try re-running or slightly rephrasing the meal description."
+                    "No explicit suggestions were returned by the assistant. The assistant is asked to provide 3-5 food suggestions tailored to the user's age and gender."
                 )
 
             if removed_items:
@@ -322,8 +359,6 @@ if st.button("Analyze"):
                     + ", ".join(removed_items)
                 )
 
-            st.subheader("Raw output")
-            st.code(content)
         except requests.exceptions.HTTPError as http_err:
             st.error(f"HTTP error: {http_err}")
         except Exception as e:
