@@ -1,10 +1,16 @@
+url=https://github.com/fridazccy/Eat_wise/blob/main/server/streamlit_app.py
 import os, re, json, requests, streamlit as st
-from dotenv import load_dotenv
+# dotenv is optional now so the app won't crash if the package isn't installed
+try:
+    from dotenv import load_dotenv
+    _HAVE_DOTENV = True
+except Exception:
+    _HAVE_DOTENV = False
 from pathlib import Path
 
-# Load local env (server/api.env) if present
+# Load local env (server/api.env) if present and python-dotenv is available
 env_path = Path(__file__).parent / "api.env"
-if env_path.exists():
+if _HAVE_DOTENV and env_path.exists():
     load_dotenv(dotenv_path=env_path)
 
 def get_secret(name, default=None):
@@ -25,7 +31,7 @@ st.set_page_config(page_title="Eat Wise — Simple Nutrition", layout="wide")
 st.title("Eat Wise — Simple Nutrition")
 
 if not AZURE_API_KEY or not AZURE_ENDPOINT or not AZURE_OPENAI_DEPLOYMENT:
-    st.error("Missing Azure config. Create server/api.env or .streamlit/secrets.toml with credentials.")
+    st.error("Missing Azure config. Create server/api.env or .streamlit/secrets.toml with credentials, or set env vars in Streamlit Cloud.")
     st.stop()
 
 prompt = """
