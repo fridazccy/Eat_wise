@@ -1,3 +1,7 @@
+# open streamlit - 
+# cd /c/Users/frida/Eat_wise/server 
+# python -m streamlit run streamlit_app.py --server.headless true
+
 # eatwise
 ## Local environment setup (important)
 
