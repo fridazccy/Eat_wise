@@ -61,9 +61,10 @@ DIETARY_OPTIONS = [
 ]
 restrictions = st.sidebar.multiselect("Dietary Restrictions (optional)", DIETARY_OPTIONS)
 
+# ---- Core prompts / helpers ----
 base_prompt = """
 You are a nutrition assistant. Given a meal description, return a single JSON object with:
-- items: array of {name, quantity_text, estimated_grams (optional), calories_estimate, protein_g, carbs_g, fat_g, estimated}
+- items: array of {name, quantity_text, estimated_grams (optional), calories_estimate, protein_g, carbs_g, fat_g}
 - totals: {calories, protein_g, carbs_g, fat_g}
 - suggestions: array of short suggestions
 Return ONLY valid JSON.
@@ -100,14 +101,43 @@ def build_prompt(meal_text: str, gender: str, age_group: str, restrictions_list:
     return system_message
 
 
-def call_azure(meal, gender, age_group, restrictions_list):
-    system_prompt = build_prompt(meal, gender, age_group, restrictions_list)
+def build_recipe_prompt(meal_type: str, gender: str, age_group: str, restrictions_list: list):
+    # Prompt the model to return structured JSON with recipes
+    ctx = f"User profile: gender={gender}, age_group={age_group}. Requested meal type: {meal_type}."
+    if restrictions_list:
+        ctx += " Dietary restrictions: " + ", ".join(restrictions_list) + "."
+        ctx += " AVOID foods that violate the listed dietary restrictions."
+    else:
+        ctx += " No dietary restrictions."
+
+    # Recipe JSON schema instruction
+    recipe_schema = """
+You are a recipe suggestion assistant. Return ONLY valid JSON with the following structure:
+{
+  "recipes": [
+    {
+      "name": "<recipe name>",
+      "servings": "<e.g. 1 serving>",
+      "prep_time": "<e.g. 15 mins>",
+      "ingredients": ["ingredient 1", "ingredient 2", ...],
+      "steps": ["step 1", "step 2", ...],
+      "notes": "<short suitability notes, e.g., 'soft food, high protein'>"
+    },
+    ...
+  ]
+}
+Provide 3 recipe suggestions appropriate for the meal type (breakfast/lunch/dinner) and tailored to the user's age and gender. Keep ingredient lists concise and practical. Avoid recommending items that violate dietary restrictions.
+"""
+    return ctx + "\n\n" + recipe_schema
+
+
+def call_azure_general(system_prompt: str, user_content: str):
     url = f"{AZURE_ENDPOINT.rstrip('/')}/openai/deployments/{AZURE_OPENAI_DEPLOYMENT}/chat/completions?api-version={AZURE_API_VERSION}"
     headers = {"Content-Type": "application/json", "api-key": AZURE_API_KEY}
     body = {
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": meal},
+            {"role": "user", "content": user_content},
         ],
         "max_tokens": 800,
         "temperature": 0.2,
@@ -125,7 +155,7 @@ def extract_json(text):
         if m:
             try:
                 return json.loads(m.group(0))
-            except:
+            except Exception:
                 return {"raw": text}
         return {"raw": text}
 
@@ -133,83 +163,27 @@ def extract_json(text):
 # Post-processing: simple keyword-based restriction enforcement (safety net)
 RESTRICTION_KEYWORDS = {
     "Vegetarian": [
-        "chicken",
-        "beef",
-        "pork",
-        "fish",
-        "salmon",
-        "tuna",
-        "turkey",
-        "lamb",
-        "bacon",
-        "ham",
-        "sausage",
-        "shrimp",
-        "seafood",
-        "meat",
-        "duck",
-        "veal",
-        "venison",
-        "anchovy",
+        "chicken", "beef", "pork", "fish", "salmon", "tuna", "turkey", "lamb",
+        "bacon", "ham", "sausage", "shrimp", "seafood", "meat", "duck", "veal",
+        "venison", "anchovy",
     ],
     "Vegan": [
-        # vegan includes vegetarian keywords
-        "chicken",
-        "beef",
-        "pork",
-        "fish",
-        "salmon",
-        "tuna",
-        "turkey",
-        "lamb",
-        "bacon",
-        "ham",
-        "sausage",
-        "shrimp",
-        "seafood",
-        "meat",
-        "duck",
-        "veal",
-        "venison",
-        "anchovy",
-        # plus animal products
-        "milk",
-        "cheese",
-        "butter",
-        "yogurt",
-        "cream",
-        "egg",
-        "eggs",
-        "honey",
+        "chicken", "beef", "pork", "fish", "salmon", "tuna", "turkey", "lamb",
+        "bacon", "ham", "sausage", "shrimp", "seafood", "meat", "duck", "veal",
+        "venison", "anchovy", "milk", "cheese", "butter", "yogurt", "cream",
+        "egg", "eggs", "honey",
     ],
     "Dairy-free": ["milk", "cheese", "butter", "yogurt", "cream", "ice cream"],
     "Gluten-free": [
-        "bread",
-        "wheat",
-        "pasta",
-        "flour",
-        "beer",
-        "barley",
-        "rye",
-        "seitan",
-        "breadcrumbs",
-        "croutons",
+        "bread", "wheat", "pasta", "flour", "beer", "barley", "rye", "seitan",
+        "breadcrumbs", "croutons",
     ],
     "Nut-free": [
-        "almond",
-        "peanut",
-        "peanuts",
-        "cashew",
-        "walnut",
-        "pecan",
-        "hazelnut",
-        "brazil nut",
-        "macadamia",
-        "nut",
+        "almond", "peanut", "peanuts", "cashew", "walnut", "pecan", "hazelnut",
+        "brazil nut", "macadamia", "nut",
     ],
     "Halal": ["pork", "alcohol", "wine", "beer"],
     "Kosher": ["pork", "shrimp", "crab", "lobster", "shellfish"],
-    # "Others": no built-in keywords
 }
 
 
@@ -221,7 +195,6 @@ def violates_restrictions(item_name: str, restrictions_list: list) -> bool:
         keywords = RESTRICTION_KEYWORDS.get(r, [])
         for kw in keywords:
             if kw in name:
-                # Special-case: avoid false positives like "donut" matching "nut"
                 if kw == "nut" and "donut" in name:
                     continue
                 return True
@@ -229,10 +202,6 @@ def violates_restrictions(item_name: str, restrictions_list: list) -> bool:
 
 
 def filter_items_by_restrictions(parsed: dict, restrictions_list: list) -> (dict, list):
-    """
-    Remove items that clearly violate restrictions (keyword-based).
-    Returns modified parsed dict and a list of removed item names.
-    """
     removed = []
     if not isinstance(parsed, dict):
         return parsed, removed
@@ -270,7 +239,6 @@ def filter_items_by_restrictions(parsed: dict, restrictions_list: list) -> (dict
                 totals["fat_g"] += it["fat_g"]
                 any_numeric = True
         if any_numeric:
-            # Round totals to 1 decimal for internal totals values (we will format as strings for display)
             parsed["totals"] = {
                 "calories": round(totals["calories"], 1),
                 "protein_g": round(totals["protein_g"], 1),
@@ -283,24 +251,8 @@ def filter_items_by_restrictions(parsed: dict, restrictions_list: list) -> (dict
     return parsed, removed
 
 
-# Helper: check whether an item contains any numeric nutrition data
-def item_has_nutrition(it: dict) -> bool:
-    if not isinstance(it, dict):
-        return False
-    for key in ("calories_estimate", "protein_g", "carbs_g", "fat_g"):
-        v = it.get(key)
-        if isinstance(v, (int, float)):
-            # treat presence of numeric (including 0) as having nutrition data; later we'll filter all-zero rows
-            return True
-        if isinstance(v, str) and v.strip() != "":
-            # allow numeric strings
-            if re.match(r"^-?\d+(\.\d+)?$", v.strip()):
-                return True
-    return False
-
-
+# Helpers for numeric parsing / formatting
 def parse_float_safe(v):
-    """Return float if v looks numeric, else None."""
     if v is None:
         return None
     if isinstance(v, (int, float)):
@@ -318,138 +270,216 @@ def parse_float_safe(v):
 
 
 def format_one_decimal_str(v):
-    """Return a string formatted to 1 decimal place if v is numeric, otherwise empty string or original non-numeric value."""
     t = parse_float_safe(v)
     if t is None:
-        # If v exists but isn't numeric, return it as-is; else return empty string
         return str(v) if (v is not None and v != "") else ""
     return f"{t:.1f}"
 
 
-# Main UI: meal input and analyze button
-meal = st.text_area(
-    "Describe your meal",
-    "One chicken Caesar salad with dressing, a medium apple, and a cup of coffee.",
-    height=140,
-)
+def item_has_nutrition(it: dict) -> bool:
+    if not isinstance(it, dict):
+        return False
+    for key in ("calories_estimate", "protein_g", "carbs_g", "fat_g"):
+        v = it.get(key)
+        if isinstance(v, (int, float)):
+            return True
+        if isinstance(v, str) and v.strip() != "":
+            if re.match(r"^-?\d+(\.\d+)?$", v.strip()):
+                return True
+    return False
 
-if st.button("Analyze"):
-    with st.spinner("Analyzing..."):
-        try:
-            resp = call_azure(meal, gender, age, restrictions)
-            content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
-            parsed = extract_json(content)
 
-            # Enforce restrictions as a safety net (filter out violating items)
-            parsed_filtered, removed_items = filter_items_by_restrictions(parsed, restrictions)
+# ---- UI: Tabs ----
+tab1, tab2 = st.tabs(["Analyze", "Recipes"])
 
-            # Present nutrition table instead of a long JSON list
-            st.subheader("Nutrition Analysis")
-            missing_nutrition = []
-            shown_rows = []
+with tab1:
+    # Main UI: meal input and analyze button
+    meal = st.text_area(
+        "Describe your meal",
+        "One chicken Caesar salad with dressing, a medium apple, and a cup of coffee.",
+        height=140,
+    )
 
-            if isinstance(parsed_filtered, dict) and isinstance(parsed_filtered.get("items"), list):
-                items = parsed_filtered.get("items", [])
-                # Build a dataframe with chosen columns (exclude Estimated column as requested)
-                for it in items:
-                    if not isinstance(it, dict):
-                        continue
-                    name = it.get("name", "") or ""
-                    # If the item has no numeric nutrition fields at all, treat as missing
-                    if not item_has_nutrition(it):
-                        missing_nutrition.append(name or json.dumps(it))
-                        continue
+    if st.button("Analyze"):
+        with st.spinner("Analyzing..."):
+            try:
+                resp = call_azure_general(build_prompt(meal, gender, age, restrictions), meal)
+                content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+                parsed = extract_json(content)
 
-                    # Parse numeric values safely
-                    cal = parse_float_safe(it.get("calories_estimate"))
-                    prot = parse_float_safe(it.get("protein_g"))
-                    carbs = parse_float_safe(it.get("carbs_g"))
-                    fat = parse_float_safe(it.get("fat_g"))
+                # Enforce restrictions as a safety net (filter out violating items)
+                parsed_filtered, removed_items = filter_items_by_restrictions(parsed, restrictions)
 
-                    # If all four numeric nutrition values are present and equal to 0 (or parsed as 0.0), treat as missing and remove the row
-                    cal_zero = (cal is not None and cal == 0.0)
-                    prot_zero = (prot is not None and prot == 0.0)
-                    carbs_zero = (carbs is not None and carbs == 0.0)
-                    fat_zero = (fat is not None and fat == 0.0)
-                    # If all four keys exist (at least parsed as numeric or string numeric) and all are zero -> missing
-                    keys_present = all(k in it for k in ("calories_estimate", "protein_g", "carbs_g", "fat_g"))
-                    if keys_present and cal_zero and prot_zero and carbs_zero and fat_zero:
-                        missing_nutrition.append(name or json.dumps(it))
-                        continue
+                # Present nutrition table instead of a long JSON list
+                st.subheader("Nutrition Analysis")
+                missing_nutrition = []
+                shown_rows = []
 
-                    # Format numeric values to strings with 1 decimal place (or keep estimated_grams as-is)
-                    shown_rows.append(
-                        {
-                            "Name": name,
-                            "Quantity": it.get("quantity_text", ""),
-                            "Estimated grams": it.get("estimated_grams", ""),
-                            "Calories": format_one_decimal_str(it.get("calories_estimate")),
-                            "Protein (g)": format_one_decimal_str(it.get("protein_g")),
-                            "Carbs (g)": format_one_decimal_str(it.get("carbs_g")),
-                            "Fat (g)": format_one_decimal_str(it.get("fat_g")),
-                        }
+                if isinstance(parsed_filtered, dict) and isinstance(parsed_filtered.get("items"), list):
+                    items = parsed_filtered.get("items", [])
+                    # Build a dataframe with chosen columns (exclude Estimated column)
+                    for it in items:
+                        if not isinstance(it, dict):
+                            continue
+                        name = it.get("name", "") or ""
+                        # If the item has no numeric nutrition fields at all, treat as missing
+                        if not item_has_nutrition(it):
+                            missing_nutrition.append(name or json.dumps(it))
+                            continue
+
+                        # Parse numeric values safely
+                        cal = parse_float_safe(it.get("calories_estimate"))
+                        prot = parse_float_safe(it.get("protein_g"))
+                        carbs = parse_float_safe(it.get("carbs_g"))
+                        fat = parse_float_safe(it.get("fat_g"))
+
+                        # If all four numeric nutrition values are present and equal to 0 (or parsed as 0.0), treat as missing and remove the row
+                        cal_zero = (cal is not None and cal == 0.0)
+                        prot_zero = (prot is not None and prot == 0.0)
+                        carbs_zero = (carbs is not None and carbs == 0.0)
+                        fat_zero = (fat is not None and fat == 0.0)
+                        keys_present = all(k in it for k in ("calories_estimate", "protein_g", "carbs_g", "fat_g"))
+                        if keys_present and cal_zero and prot_zero and carbs_zero and fat_zero:
+                            missing_nutrition.append(name or json.dumps(it))
+                            continue
+
+                        # Format numeric values to strings with 1 decimal place (or keep estimated_grams as-is)
+                        shown_rows.append(
+                            {
+                                "Name": name,
+                                "Quantity": it.get("quantity_text", ""),
+                                "Estimated grams": it.get("estimated_grams", ""),
+                                "Calories": format_one_decimal_str(it.get("calories_estimate")),
+                                "Protein (g)": format_one_decimal_str(it.get("protein_g")),
+                                "Carbs (g)": format_one_decimal_str(it.get("carbs_g")),
+                                "Fat (g)": format_one_decimal_str(it.get("fat_g")),
+                            }
+                        )
+
+                    # If no items have nutrition details, show message and stop showing tables
+                    if not shown_rows:
+                        if missing_nutrition:
+                            st.error(
+                                "Data can't support the result: the following items do not have nutrition details in the database and could not be analyzed: "
+                                + ", ".join(missing_nutrition)
+                            )
+                        else:
+                            st.error("Data can't support the result: no analyzable nutrition items were returned.")
+                    else:
+                        df = pd.DataFrame(shown_rows)
+                        # Set index to start at 1 to show ranking beginning from 1
+                        df.index = pd.RangeIndex(start=1, stop=1 + len(df))
+                        df.index.name = "No."
+                        st.table(df)
+
+                        # Show totals as a compact vertical table (formatted strings with 1 decimal)
+                        totals = parsed_filtered.get("totals")
+                        if isinstance(totals, dict):
+                            totals_row = {
+                                "Calories": format_one_decimal_str(totals.get("calories")),
+                                "Protein (g)": format_one_decimal_str(totals.get("protein_g")),
+                                "Carbs (g)": format_one_decimal_str(totals.get("carbs_g")),
+                                "Fat (g)": format_one_decimal_str(totals.get("fat_g")),
+                            }
+                            df_totals = pd.DataFrame.from_dict(totals_row, orient="index", columns=["Total"])
+                            st.subheader("Totals")
+                            st.table(df_totals)
+                else:
+                    st.error("Could not parse nutrition items from the assistant response.")
+
+                # Display suggestions
+                suggestions = []
+                if isinstance(parsed_filtered, dict):
+                    suggestions = parsed_filtered.get("suggestions") or []
+                st.subheader("Suggestions")
+                if suggestions and isinstance(suggestions, list):
+                    for s in suggestions:
+                        st.write(f"- {s}")
+                else:
+                    st.info(
+                        "No explicit suggestions were returned by the assistant. The assistant is asked to provide 3-5 food suggestions tailored to the user's age and gender."
                     )
 
-                # If no items have nutrition details, show message and stop showing tables
-                if not shown_rows:
-                    if missing_nutrition:
-                        st.error(
-                            "Data can't support the result: the following items do not have nutrition details in the database and could not be analyzed: "
-                            + ", ".join(missing_nutrition)
-                        )
-                    else:
-                        st.error("Data can't support the result: no analyzable nutrition items were returned.")
+                # Show removed items for restrictions if any
+                if removed_items:
+                    st.warning(
+                        "The following items were removed from the results because they conflict with the selected dietary restrictions: "
+                        + ", ".join(removed_items)
+                    )
+
+                # Place the missing-nutrition message at the bottom of the page (below removed-items)
+                if missing_nutrition:
+                    st.info(
+                        "The following items could not be analyzed because nutrition details are not available: "
+                        + ", ".join(missing_nutrition)
+                    )
+
+            except requests.exceptions.HTTPError as http_err:
+                st.error(f"HTTP error: {http_err}")
+            except Exception as e:
+                st.error(f"Error: {e}")
+
+
+with tab2:
+    st.header("Recipe Recommendations")
+    st.write("Choose a meal type to get 3 recipe suggestions tailored to your age, gender, and dietary restrictions.")
+
+    # Meal type buttons placed horizontally
+    col_b, col_l, col_d = st.columns(3)
+    recipe_type = None
+    with col_b:
+        if st.button("Breakfast"):
+            recipe_type = "breakfast"
+    with col_l:
+        if st.button("Lunch"):
+            recipe_type = "lunch"
+    with col_d:
+        if st.button("Dinner"):
+            recipe_type = "dinner"
+
+    # Optionally allow free-text hints
+    hint = st.text_input("Optional: add a preference or ingredient you'd like included (e.g., 'no soy', 'quick', 'kid-friendly')")
+
+    if recipe_type:
+        with st.spinner(f"Generating {recipe_type} recipes..."):
+            try:
+                system_prompt = build_recipe_prompt(recipe_type, gender, age, restrictions)
+                user_content = hint or f"Please suggest 3 {recipe_type} recipes."
+                resp = call_azure_general(system_prompt, user_content)
+                content = resp.get("choices", [{}])[0].get("message", {}).get("content", "")
+                parsed = extract_json(content)
+
+                # parsed expected to contain {"recipes": [ ... ]}
+                if isinstance(parsed, dict) and isinstance(parsed.get("recipes"), list):
+                    recipes = parsed.get("recipes")
+                    for idx, r in enumerate(recipes, start=1):
+                        name = r.get("name", f"Recipe {idx}")
+                        servings = r.get("servings", "")
+                        prep_time = r.get("prep_time", "")
+                        ingredients = r.get("ingredients", []) or []
+                        steps = r.get("steps", []) or []
+                        notes = r.get("notes", "")
+
+                        st.subheader(f"{idx}. {name}")
+                        if servings:
+                            st.write(f"Servings: {servings} | Prep: {prep_time}")
+                        if notes:
+                            st.caption(notes)
+                        if ingredients:
+                            st.write("Ingredients:")
+                            for ing in ingredients:
+                                st.write(f"- {ing}")
+                        if steps:
+                            st.write("Steps:")
+                            for i, step in enumerate(steps, start=1):
+                                st.write(f"{i}. {step}")
+                        st.markdown("---")
                 else:
-                    df = pd.DataFrame(shown_rows)
-                    # Set index to start at 1 to show ranking beginning from 1
-                    df.index = pd.RangeIndex(start=1, stop=1 + len(df))
-                    df.index.name = "No."
-                    st.table(df)
+                    # If not structured JSON, show raw text (but do not reveal secrets)
+                    st.info("Couldn't parse structured recipes from assistant. Showing raw assistant answer below.")
+                    st.write(content)
 
-                    # Show totals as a compact vertical table (formatted strings with 1 decimal)
-                    totals = parsed_filtered.get("totals")
-                    if isinstance(totals, dict):
-                        totals_row = {
-                            "Calories": format_one_decimal_str(totals.get("calories")),
-                            "Protein (g)": format_one_decimal_str(totals.get("protein_g")),
-                            "Carbs (g)": format_one_decimal_str(totals.get("carbs_g")),
-                            "Fat (g)": format_one_decimal_str(totals.get("fat_g")),
-                        }
-                        # Represent totals as an index->value table to avoid numeric index column (the "0" column)
-                        df_totals = pd.DataFrame.from_dict(totals_row, orient="index", columns=["Total"])
-                        st.subheader("Totals")
-                        st.table(df_totals)
-            else:
-                st.error("Could not parse nutrition items from the assistant response.")
-
-            # Display suggestions
-            suggestions = []
-            if isinstance(parsed_filtered, dict):
-                suggestions = parsed_filtered.get("suggestions") or []
-            st.subheader("Suggestions")
-            if suggestions and isinstance(suggestions, list):
-                for s in suggestions:
-                    st.write(f"- {s}")
-            else:
-                st.info(
-                    "No explicit suggestions were returned by the assistant. The assistant is asked to provide 3-5 food suggestions tailored to the user's age and gender."
-                )
-
-            # Show removed items for restrictions if any
-            if removed_items:
-                st.warning(
-                    "The following items were removed from the results because they conflict with the selected dietary restrictions: "
-                    + ", ".join(removed_items)
-                )
-
-            # Place the missing-nutrition message at the bottom of the page (below removed-items)
-            if missing_nutrition:
-                st.info(
-                    "The following items could not be analyzed because nutrition details are not available: "
-                    + ", ".join(missing_nutrition)
-                )
-
-        except requests.exceptions.HTTPError as http_err:
-            st.error(f"HTTP error: {http_err}")
-        except Exception as e:
-            st.error(f"Error: {e}")
+            except requests.exceptions.HTTPError as http_err:
+                st.error(f"HTTP error: {http_err}")
+            except Exception as e:
+                st.error(f"Error: {e}")
