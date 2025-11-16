@@ -1,1 +1,1 @@
-# fridaz
+# eatwise
