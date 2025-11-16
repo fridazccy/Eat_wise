@@ -58,11 +58,6 @@ DIETARY_OPTIONS = [
     "Kosher",
     "Others",
 ]
-restrictions = st.sidebar.multiselect("Dietary Restrictions (optional)", DIETARY_OPTIONS)
-if restrictions:
-    st.sidebar.info("Suggestions will avoid items that conflict with the selected restrictions.")
-else:
-    st.sidebar.write("No dietary restrictions selected.")
 
 
 base_prompt = """
