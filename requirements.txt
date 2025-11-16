@@ -1,4 +1,3 @@
-url=https://github.com/fridazccy/Eat_wise/blob/main/requirements.txt
 streamlit>=1.0
 requests
 python-dotenv
