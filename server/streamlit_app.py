@@ -282,6 +282,21 @@ def filter_items_by_restrictions(parsed: dict, restrictions_list: list) -> (dict
     return parsed, removed
 
 
+# Helper: check whether an item contains any numeric nutrition data
+def item_has_nutrition(it: dict) -> bool:
+    if not isinstance(it, dict):
+        return False
+    for key in ("calories_estimate", "protein_g", "carbs_g", "fat_g"):
+        v = it.get(key)
+        if isinstance(v, (int, float)):
+            return True
+        if isinstance(v, str) and v.strip() != "":
+            # allow numeric strings
+            if re.match(r"^-?\d+(\.\d+)?$", v.strip()):
+                return True
+    return False
+
+
 # Main UI: meal input and analyze button
 meal = st.text_area(
     "Describe your meal",
@@ -301,46 +316,69 @@ if st.button("Analyze"):
 
             # Present nutrition table instead of a long JSON list
             st.subheader("Nutrition Analysis")
+            missing_nutrition = []
+            shown_rows = []
+
             if isinstance(parsed_filtered, dict) and isinstance(parsed_filtered.get("items"), list):
                 items = parsed_filtered.get("items", [])
-                # Build a dataframe with chosen columns
-                rows = []
+                # Build a dataframe with chosen columns (exclude Estimated column as requested)
                 for it in items:
                     if not isinstance(it, dict):
                         continue
-                    rows.append(
+                    name = it.get("name", "") or ""
+                    if not item_has_nutrition(it):
+                        missing_nutrition.append(name or json.dumps(it))
+                        continue
+                    shown_rows.append(
                         {
-                            "Name": it.get("name", ""),
+                            "Name": name,
                             "Quantity": it.get("quantity_text", ""),
                             "Estimated grams": it.get("estimated_grams", ""),
                             "Calories": it.get("calories_estimate", ""),
                             "Protein (g)": it.get("protein_g", ""),
                             "Carbs (g)": it.get("carbs_g", ""),
                             "Fat (g)": it.get("fat_g", ""),
-                            "Estimated?": it.get("estimated", ""),
                         }
                     )
-                if rows:
-                    df = pd.DataFrame(rows)
-                    st.table(df)
-                else:
-                    st.info("No itemized foods returned by the assistant.")
 
-                # Show totals as a compact table if available
-                totals = parsed_filtered.get("totals")
-                if isinstance(totals, dict):
-                    totals_row = {
-                        "Calories": totals.get("calories", ""),
-                        "Protein (g)": totals.get("protein_g", ""),
-                        "Carbs (g)": totals.get("carbs_g", ""),
-                        "Fat (g)": totals.get("fat_g", ""),
-                    }
-                    st.subheader("Totals")
-                    st.table(pd.DataFrame([totals_row]))
+                # If no items have nutrition details, show message and stop showing tables
+                if not shown_rows:
+                    if missing_nutrition:
+                        st.error(
+                            "Data can't support the result: the following items do not have nutrition details in the database and could not be analyzed: "
+                            + ", ".join(missing_nutrition)
+                        )
+                    else:
+                        st.error("Data can't support the result: no analyzable nutrition items were returned.")
+                else:
+                    # If some items were missing nutrition, warn the user but still show the table for items that do have data
+                    if missing_nutrition:
+                        st.warning(
+                            "The following items could not be analyzed because nutrition details are not available: "
+                            + ", ".join(missing_nutrition)
+                        )
+
+                    df = pd.DataFrame(shown_rows)
+                    # Set index to start at 1 to show ranking beginning from 1
+                    df.index = pd.RangeIndex(start=1, stop=1 + len(df))
+                    df.index.name = "No."
+                    st.table(df)
+
+                    # Show totals as a compact table if available and numeric
+                    totals = parsed_filtered.get("totals")
+                    if isinstance(totals, dict):
+                        totals_row = {
+                            "Calories": totals.get("calories", ""),
+                            "Protein (g)": totals.get("protein_g", ""),
+                            "Carbs (g)": totals.get("carbs_g", ""),
+                            "Fat (g)": totals.get("fat_g", ""),
+                        }
+                        st.subheader("Totals")
+                        st.table(pd.DataFrame([totals_row]))
             else:
                 st.error("Could not parse nutrition items from the assistant response.")
 
-            # Display suggestions (no extra parenthetical text)
+            # Display suggestions
             suggestions = []
             if isinstance(parsed_filtered, dict):
                 suggestions = parsed_filtered.get("suggestions") or []
