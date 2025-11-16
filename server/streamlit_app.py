@@ -1,11 +1,16 @@
-url=https://github.com/fridazccy/Eat_wise/blob/main/server/streamlit_app.py
-import os, re, json, requests, streamlit as st
-# dotenv is optional now so the app won't crash if the package isn't installed
+import os
+import re
+import json
+import requests
+import streamlit as st
+
+# dotenv is optional so the app won't crash if python-dotenv is not installed
 try:
     from dotenv import load_dotenv
     _HAVE_DOTENV = True
 except Exception:
     _HAVE_DOTENV = False
+
 from pathlib import Path
 
 # Load local env (server/api.env) if present and python-dotenv is available
@@ -31,7 +36,7 @@ st.set_page_config(page_title="Eat Wise — Simple Nutrition", layout="wide")
 st.title("Eat Wise — Simple Nutrition")
 
 if not AZURE_API_KEY or not AZURE_ENDPOINT or not AZURE_OPENAI_DEPLOYMENT:
-    st.error("Missing Azure config. Create server/api.env or .streamlit/secrets.toml with credentials, or set env vars in Streamlit Cloud.")
+    st.error("Missing Azure config. Create server/api.env or add secrets in Streamlit Cloud.")
     st.stop()
 
 prompt = """
@@ -56,8 +61,10 @@ def extract_json(text):
     except Exception:
         m = re.search(r"\{[\s\S]*\}", text)
         if m:
-            try: return json.loads(m.group(0))
-            except: return {"raw": text}
+            try:
+                return json.loads(m.group(0))
+            except:
+                return {"raw": text}
         return {"raw": text}
 
 meal = st.text_area("Describe your meal", "One chicken Caesar salad with dressing, a medium apple, and a cup of coffee.", height=140)
