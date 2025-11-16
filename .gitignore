@@ -1,5 +1,4 @@
 # ignore local environment files
-.env
 api.env
 
 # node / build artifacts
