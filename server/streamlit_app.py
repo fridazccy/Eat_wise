@@ -60,7 +60,6 @@ DIETARY_OPTIONS = [
 ]
 restrictions = st.sidebar.multiselect("Dietary Restrictions (optional)", DIETARY_OPTIONS)
 
-
 base_prompt = """
 You are a nutrition assistant. Given a meal description, return a single JSON object with:
 - items: array of {name, quantity_text, estimated_grams (optional), calories_estimate, protein_g, carbs_g, fat_g, estimated}
@@ -69,26 +68,34 @@ You are a nutrition assistant. Given a meal description, return a single JSON ob
 Return ONLY valid JSON.
 """
 
-
 def build_prompt(meal_text: str, gender: str, age_group: str, restrictions_list: list):
     # Add user context and explicit restriction enforcement instructions
     ctx = f"User profile: gender={gender}, age_group={age_group}."
     if restrictions_list:
         ctx += " Dietary restrictions: " + ", ".join(restrictions_list) + "."
-        # Add more explicit guidance so the model avoids restricted items.
         ctx += " When producing items and suggestions, AVOID foods that violate the listed dietary restrictions. "\
                "For example, if 'Vegetarian' is listed, do NOT include meat, fish, poultry, or seafood. "\
                "If 'Vegan' is listed, also avoid dairy, eggs, and honey. "\
                "If 'Nut-free' is listed, avoid nuts and nut-containing foods. "\
                "If 'Gluten-free' is listed, avoid wheat, bread, pasta, and other gluten-containing ingredients. "\
                "If 'Dairy-free' is listed, avoid milk, cheese, butter, yogurt, and similar dairy ingredients. "\
-               "If 'Halal' or 'Kosher' are listed, avoid pork and other explicitly forbidden foods for those diets. "\
+               "If 'Halal' or 'Kosher' is listed, avoid pork and other explicitly forbidden foods for those diets. "\
                "If 'Others' is listed, assume no automatic restrictions unless specified in the meal description."
     else:
         ctx += " No dietary restrictions."
 
-    # Combine with the meal
-    system_message = base_prompt + "\n\n" + ctx
+    # Add explicit instructions to tailor suggestions to age & gender
+    age_gender_guidance = (
+        "Additionally, provide a short list (3-5) of food suggestions tailored to the user's age group and gender. "
+        "Be specific and practical: for children (0-6, 7-12) recommend softer, easy-to-eat, nutrient-dense finger foods and pediatric-appropriate portions; "
+        "for teenagers and young adults (13-24) recommend balanced meals with adequate protein and energy for growth and activity; "
+        "for adults (25-49) recommend balanced portion sizes and varied nutrients; "
+        "for older adults (50-59, >60) recommend softer, easy-to-chew, nutrient-dense foods higher in protein, calcium, and fiber and emphasize hydration and foods that support digestion. "
+        "When applicable, mention small practical serving examples (e.g., 'soft cooked salmon flaked over mashed sweet potato') and avoid recommending foods that contradict dietary restrictions. "
+        "Also include any small swaps to make common items more appropriate (e.g., 'use mashed avocado instead of butter' for softer texture)."
+    )
+
+    system_message = base_prompt + "\n\n" + ctx + "\n\n" + age_gender_guidance
     return system_message
 
 
@@ -293,6 +300,21 @@ if st.button("Analyze"):
 
             st.subheader("Parsed JSON")
             st.json(parsed_filtered)
+
+            # Display age/gender-tailored suggestions (from the model's 'suggestions' field)
+            suggestions = []
+            if isinstance(parsed_filtered, dict):
+                suggestions = parsed_filtered.get("suggestions") or []
+            if suggestions and isinstance(suggestions, list):
+                st.subheader("Suggestions (tailored to age & gender)")
+                for s in suggestions:
+                    st.write(f"- {s}")
+            else:
+                # If model didn't return suggestions, show an informative fallback
+                st.info(
+                    "No explicit suggestions were returned by the assistant. The assistant is asked to provide 3-5 food suggestions tailored to the user's age and gender; "
+                    "if you don't see suggestions, try re-running or slightly rephrasing the meal description."
+                )
 
             if removed_items:
                 st.warning(
