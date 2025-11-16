@@ -271,10 +271,10 @@ def filter_items_by_restrictions(parsed: dict, restrictions_list: list) -> (dict
                 any_numeric = True
         if any_numeric:
             parsed["totals"] = {
-                "calories": round(totals["calories"], 2),
-                "protein_g": round(totals["protein_g"], 2),
-                "carbs_g": round(totals["carbs_g"], 2),
-                "fat_g": round(totals["fat_g"], 2),
+                "calories": round(totals["calories"], 1),
+                "protein_g": round(totals["protein_g"], 1),
+                "carbs_g": round(totals["carbs_g"], 1),
+                "fat_g": round(totals["fat_g"], 1),
             }
     except Exception:
         pass
@@ -367,16 +367,20 @@ if st.button("Analyze"):
                         missing_nutrition.append(name or json.dumps(it))
                         continue
 
-                    # Otherwise include row (show numeric or original values)
+                    # Otherwise include row (show numeric rounded to 1 decimal when numeric)
+                    def fmt(val):
+                        v = parse_float_safe(val)
+                        return round(v, 1) if v is not None else (val if val is not None else "")
+
                     shown_rows.append(
                         {
                             "Name": name,
                             "Quantity": it.get("quantity_text", ""),
                             "Estimated grams": it.get("estimated_grams", ""),
-                            "Calories": cal if cal is not None else it.get("calories_estimate", ""),
-                            "Protein (g)": prot if prot is not None else it.get("protein_g", ""),
-                            "Carbs (g)": carbs if carbs is not None else it.get("carbs_g", ""),
-                            "Fat (g)": fat if fat is not None else it.get("fat_g", ""),
+                            "Calories": fmt(it.get("calories_estimate")),
+                            "Protein (g)": fmt(it.get("protein_g")),
+                            "Carbs (g)": fmt(it.get("carbs_g")),
+                            "Fat (g)": fmt(it.get("fat_g")),
                         }
                     )
 
@@ -384,19 +388,12 @@ if st.button("Analyze"):
                 if not shown_rows:
                     if missing_nutrition:
                         st.error(
-                            "Data can't support the result: the following items do not have nutrition details in the database or contained only zero values and could not be analyzed: "
+                            "Data can't support the result: the following items do not have nutrition details in the database and could not be analyzed: "
                             + ", ".join(missing_nutrition)
                         )
                     else:
                         st.error("Data can't support the result: no analyzable nutrition items were returned.")
                 else:
-                    # If some items were missing nutrition, warn the user but still show the table for items that do have data
-                    if missing_nutrition:
-                        st.warning(
-                            "The following items could not be analyzed because nutrition details are not available or were all zero: "
-                            + ", ".join(missing_nutrition)
-                        )
-
                     df = pd.DataFrame(shown_rows)
                     # Set index to start at 1 to show ranking beginning from 1
                     df.index = pd.RangeIndex(start=1, stop=1 + len(df))
@@ -406,11 +403,16 @@ if st.button("Analyze"):
                     # Show totals as a compact vertical table (so there's no leading '0' index column)
                     totals = parsed_filtered.get("totals")
                     if isinstance(totals, dict):
+                        # Round totals to 1 decimal when numeric
+                        def fmt_total(v):
+                            t = parse_float_safe(v)
+                            return round(t, 1) if t is not None else (v if v is not None else "")
+
                         totals_row = {
-                            "Calories": totals.get("calories", ""),
-                            "Protein (g)": totals.get("protein_g", ""),
-                            "Carbs (g)": totals.get("carbs_g", ""),
-                            "Fat (g)": totals.get("fat_g", ""),
+                            "Calories": fmt_total(totals.get("calories")),
+                            "Protein (g)": fmt_total(totals.get("protein_g")),
+                            "Carbs (g)": fmt_total(totals.get("carbs_g")),
+                            "Fat (g)": fmt_total(totals.get("fat_g")),
                         }
                         # Represent totals as an index->value table to avoid numeric index column (the "0" column)
                         df_totals = pd.DataFrame.from_dict(totals_row, orient="index", columns=["Total"])
@@ -432,10 +434,18 @@ if st.button("Analyze"):
                     "No explicit suggestions were returned by the assistant. The assistant is asked to provide 3-5 food suggestions tailored to the user's age and gender."
                 )
 
+            # Show removed items for restrictions if any
             if removed_items:
                 st.warning(
                     "The following items were removed from the results because they conflict with the selected dietary restrictions: "
                     + ", ".join(removed_items)
+                )
+
+            # Place the missing-nutrition message at the bottom of the page (below removed-items)
+            if missing_nutrition:
+                st.info(
+                    "The following items could not be analyzed because nutrition details are not available: "
+                    + ", ".join(missing_nutrition)
                 )
 
         except requests.exceptions.HTTPError as http_err:
