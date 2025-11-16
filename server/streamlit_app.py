@@ -270,6 +270,7 @@ def filter_items_by_restrictions(parsed: dict, restrictions_list: list) -> (dict
                 totals["fat_g"] += it["fat_g"]
                 any_numeric = True
         if any_numeric:
+            # Round totals to 1 decimal for internal totals values (we will format as strings for display)
             parsed["totals"] = {
                 "calories": round(totals["calories"], 1),
                 "protein_g": round(totals["protein_g"], 1),
@@ -314,6 +315,15 @@ def parse_float_safe(v):
             except Exception:
                 return None
     return None
+
+
+def format_one_decimal_str(v):
+    """Return a string formatted to 1 decimal place if v is numeric, otherwise empty string or original non-numeric value."""
+    t = parse_float_safe(v)
+    if t is None:
+        # If v exists but isn't numeric, return it as-is; else return empty string
+        return str(v) if (v is not None and v != "") else ""
+    return f"{t:.1f}"
 
 
 # Main UI: meal input and analyze button
@@ -367,20 +377,16 @@ if st.button("Analyze"):
                         missing_nutrition.append(name or json.dumps(it))
                         continue
 
-                    # Otherwise include row (show numeric rounded to 1 decimal when numeric)
-                    def fmt(val):
-                        v = parse_float_safe(val)
-                        return round(v, 1) if v is not None else (val if val is not None else "")
-
+                    # Format numeric values to strings with 1 decimal place (or keep estimated_grams as-is)
                     shown_rows.append(
                         {
                             "Name": name,
                             "Quantity": it.get("quantity_text", ""),
                             "Estimated grams": it.get("estimated_grams", ""),
-                            "Calories": fmt(it.get("calories_estimate")),
-                            "Protein (g)": fmt(it.get("protein_g")),
-                            "Carbs (g)": fmt(it.get("carbs_g")),
-                            "Fat (g)": fmt(it.get("fat_g")),
+                            "Calories": format_one_decimal_str(it.get("calories_estimate")),
+                            "Protein (g)": format_one_decimal_str(it.get("protein_g")),
+                            "Carbs (g)": format_one_decimal_str(it.get("carbs_g")),
+                            "Fat (g)": format_one_decimal_str(it.get("fat_g")),
                         }
                     )
 
@@ -400,19 +406,14 @@ if st.button("Analyze"):
                     df.index.name = "No."
                     st.table(df)
 
-                    # Show totals as a compact vertical table (so there's no leading '0' index column)
+                    # Show totals as a compact vertical table (formatted strings with 1 decimal)
                     totals = parsed_filtered.get("totals")
                     if isinstance(totals, dict):
-                        # Round totals to 1 decimal when numeric
-                        def fmt_total(v):
-                            t = parse_float_safe(v)
-                            return round(t, 1) if t is not None else (v if v is not None else "")
-
                         totals_row = {
-                            "Calories": fmt_total(totals.get("calories")),
-                            "Protein (g)": fmt_total(totals.get("protein_g")),
-                            "Carbs (g)": fmt_total(totals.get("carbs_g")),
-                            "Fat (g)": fmt_total(totals.get("fat_g")),
+                            "Calories": format_one_decimal_str(totals.get("calories")),
+                            "Protein (g)": format_one_decimal_str(totals.get("protein_g")),
+                            "Carbs (g)": format_one_decimal_str(totals.get("carbs_g")),
+                            "Fat (g)": format_one_decimal_str(totals.get("fat_g")),
                         }
                         # Represent totals as an index->value table to avoid numeric index column (the "0" column)
                         df_totals = pd.DataFrame.from_dict(totals_row, orient="index", columns=["Total"])
