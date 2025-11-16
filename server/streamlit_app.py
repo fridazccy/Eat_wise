@@ -301,6 +301,9 @@ with tab1:
     )
 
     if st.button("Analyze"):
+        # initialize these variables up-front so we can always show the removed/missing lists at the bottom
+        removed_items = []
+        missing_nutrition = []
         with st.spinner("Analyzing..."):
             try:
                 resp = call_azure_general(build_prompt(meal, gender, age, restrictions), meal)
@@ -312,7 +315,6 @@ with tab1:
 
                 # Present nutrition table instead of a long JSON list
                 st.subheader("Nutrition Analysis")
-                missing_nutrition = []
                 shown_rows = []
 
                 if isinstance(parsed_filtered, dict) and isinstance(parsed_filtered.get("items"), list):
@@ -356,7 +358,7 @@ with tab1:
                             }
                         )
 
-                    # If no items have nutrition details, show message and stop showing tables
+                    # If no items have nutrition details, show message and still continue (we will show removed/missing lists below)
                     if not shown_rows:
                         if missing_nutrition:
                             st.error(
@@ -400,7 +402,8 @@ with tab1:
                         "No explicit suggestions were returned by the assistant. The assistant is asked to provide 3-5 food suggestions tailored to the user's age and gender."
                     )
 
-                # Show removed items for restrictions if any
+                # --- ALWAYS show the removed-items warning and the missing-nutrition info at the BOTTOM ---
+                # Show removed items for restrictions if any (first)
                 if removed_items:
                     st.warning(
                         "The following items were removed from the results because they conflict with the selected dietary restrictions: "
