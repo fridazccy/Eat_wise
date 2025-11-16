@@ -289,12 +289,31 @@ def item_has_nutrition(it: dict) -> bool:
     for key in ("calories_estimate", "protein_g", "carbs_g", "fat_g"):
         v = it.get(key)
         if isinstance(v, (int, float)):
+            # treat presence of numeric (including 0) as having nutrition data; later we'll filter all-zero rows
             return True
         if isinstance(v, str) and v.strip() != "":
             # allow numeric strings
             if re.match(r"^-?\d+(\.\d+)?$", v.strip()):
                 return True
     return False
+
+
+def parse_float_safe(v):
+    """Return float if v looks numeric, else None."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return float(v)
+    if isinstance(v, str):
+        s = v.strip()
+        if s == "":
+            return None
+        if re.match(r"^-?\d+(\.\d+)?$", s):
+            try:
+                return float(s)
+            except Exception:
+                return None
+    return None
 
 
 # Main UI: meal input and analyze button
@@ -326,18 +345,38 @@ if st.button("Analyze"):
                     if not isinstance(it, dict):
                         continue
                     name = it.get("name", "") or ""
+                    # If the item has no numeric nutrition fields at all, treat as missing
                     if not item_has_nutrition(it):
                         missing_nutrition.append(name or json.dumps(it))
                         continue
+
+                    # Parse numeric values safely
+                    cal = parse_float_safe(it.get("calories_estimate"))
+                    prot = parse_float_safe(it.get("protein_g"))
+                    carbs = parse_float_safe(it.get("carbs_g"))
+                    fat = parse_float_safe(it.get("fat_g"))
+
+                    # If all four numeric nutrition values are present and equal to 0 (or parsed as 0.0), treat as missing and remove the row
+                    cal_zero = (cal is not None and cal == 0.0)
+                    prot_zero = (prot is not None and prot == 0.0)
+                    carbs_zero = (carbs is not None and carbs == 0.0)
+                    fat_zero = (fat is not None and fat == 0.0)
+                    # If all four keys exist (at least parsed as numeric or string numeric) and all are zero -> missing
+                    keys_present = all(k in it for k in ("calories_estimate", "protein_g", "carbs_g", "fat_g"))
+                    if keys_present and cal_zero and prot_zero and carbs_zero and fat_zero:
+                        missing_nutrition.append(name or json.dumps(it))
+                        continue
+
+                    # Otherwise include row (show numeric or original values)
                     shown_rows.append(
                         {
                             "Name": name,
                             "Quantity": it.get("quantity_text", ""),
                             "Estimated grams": it.get("estimated_grams", ""),
-                            "Calories": it.get("calories_estimate", ""),
-                            "Protein (g)": it.get("protein_g", ""),
-                            "Carbs (g)": it.get("carbs_g", ""),
-                            "Fat (g)": it.get("fat_g", ""),
+                            "Calories": cal if cal is not None else it.get("calories_estimate", ""),
+                            "Protein (g)": prot if prot is not None else it.get("protein_g", ""),
+                            "Carbs (g)": carbs if carbs is not None else it.get("carbs_g", ""),
+                            "Fat (g)": fat if fat is not None else it.get("fat_g", ""),
                         }
                     )
 
@@ -345,7 +384,7 @@ if st.button("Analyze"):
                 if not shown_rows:
                     if missing_nutrition:
                         st.error(
-                            "Data can't support the result: the following items do not have nutrition details in the database and could not be analyzed: "
+                            "Data can't support the result: the following items do not have nutrition details in the database or contained only zero values and could not be analyzed: "
                             + ", ".join(missing_nutrition)
                         )
                     else:
@@ -354,7 +393,7 @@ if st.button("Analyze"):
                     # If some items were missing nutrition, warn the user but still show the table for items that do have data
                     if missing_nutrition:
                         st.warning(
-                            "The following items could not be analyzed because nutrition details are not available: "
+                            "The following items could not be analyzed because nutrition details are not available or were all zero: "
                             + ", ".join(missing_nutrition)
                         )
 
@@ -364,7 +403,7 @@ if st.button("Analyze"):
                     df.index.name = "No."
                     st.table(df)
 
-                    # Show totals as a compact table if available and numeric
+                    # Show totals as a compact vertical table (so there's no leading '0' index column)
                     totals = parsed_filtered.get("totals")
                     if isinstance(totals, dict):
                         totals_row = {
@@ -373,8 +412,10 @@ if st.button("Analyze"):
                             "Carbs (g)": totals.get("carbs_g", ""),
                             "Fat (g)": totals.get("fat_g", ""),
                         }
+                        # Represent totals as an index->value table to avoid numeric index column (the "0" column)
+                        df_totals = pd.DataFrame.from_dict(totals_row, orient="index", columns=["Total"])
                         st.subheader("Totals")
-                        st.table(pd.DataFrame([totals_row]))
+                        st.table(df_totals)
             else:
                 st.error("Could not parse nutrition items from the assistant response.")
 
